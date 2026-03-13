@@ -1,0 +1,4 @@
+flask
+requests
+oandapyV20
+gunicorn
