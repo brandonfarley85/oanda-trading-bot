@@ -1,4 +1,5 @@
-flask
+Flask
 requests
 oandapyV20
+six
 gunicorn
