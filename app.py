@@ -186,8 +186,7 @@ def validate_stop_distance(v):
 # OPEN TRADE
 # ===================================================
 
-def open_trade(symbol, action, stop_distance, size, tp):
-
+def open_trade(symbol, action, stop_distance, size):
 
     if spread_too_large(symbol):
         log.warning("Spread too large")
@@ -200,7 +199,8 @@ def open_trade(symbol, action, stop_distance, size, tp):
     price = get_price(symbol, action)
     dp = decimal_places(symbol)
 
-    
+    tp_distance = stop_distance * 3
+
     if action == "buy":
 
         units = int(float(size) * 100000)
@@ -219,21 +219,12 @@ def open_trade(symbol, action, stop_distance, size, tp):
             "units": str(units),
             "type": "MARKET",
             "positionFill": "DEFAULT",
-
-            "stopLossOnFill": {
-                "price": str(sl)
-            },
-
-            "takeProfitOnFill": {
-                "price": str(tp)
-            }
+            "stopLossOnFill": {"price": str(sl)},
+            "takeProfitOnFill": {"price": str(tp)}
         }
     }
 
-    r = orders.OrderCreate(
-        ACCOUNT_ID,
-        data=order_data
-    )
+    r = orders.OrderCreate(ACCOUNT_ID, data=order_data)
 
     resp = client.request(r)
 
@@ -259,8 +250,15 @@ def webhook():
     except:
         return jsonify({"error":"invalid json"}),400
 
-    symbol = format_symbol(data["symbol"])
-    action = data["action"]
+    try:
+        symbol_raw = data["symbol"]
+        action = data["action"]
+        stop_price = float(data["stop"])
+        size = float(data["size"])
+    except Exception as e:
+        return jsonify({"error":str(e)}),400
+
+    symbol = format_symbol(symbol_raw)
 
     trade_id = f"{symbol}_{action}_{int(time.time()/30)}"
 
@@ -274,16 +272,12 @@ def webhook():
     LAST_TRADE_TIME = time.time()
 
     try:
-    symbol = data["symbol"]
-    action = data["action"]
-    stop_price = float(data["stop"])
-    size = float(data["size"])
-except Exception as e:
-    return {"error": str(e)}, 400
 
-stop_distance = abs(price - stop_price)
+        price = get_price(symbol, action)
 
-stop_distance = validate_stop_distance(stop_distance)
+        stop_distance = abs(price - stop_price)
+
+        stop_distance = validate_stop_distance(stop_distance)
 
         open_trade(symbol, action, stop_distance, size)
 
@@ -293,7 +287,6 @@ stop_distance = validate_stop_distance(stop_distance)
         return jsonify({"error":str(e)}),500
 
     return jsonify({"status":"trade sent"})
-
 # ===================================================
 # HEALTH CHECK
 # ===================================================
