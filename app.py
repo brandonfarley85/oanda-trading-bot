@@ -285,7 +285,7 @@ stop_distance = abs(price - stop_price)
 
 stop_distance = validate_stop_distance(stop_distance)
 
-        open_trade(symbol, action, stop_distance, data["size"], data["tp"])
+        open_trade(symbol, action, stop_distance, size)
 
     except Exception as e:
 
