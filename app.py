@@ -177,7 +177,7 @@ def validate_stop_distance(v):
     if math.isnan(v) or math.isinf(v) or v <= 0:
         raise ValueError("Invalid stop distance")
 
-    if v > 0.01:
+    if v > 0.02:
         raise ValueError("Stop distance too large")
 
     return v
@@ -186,7 +186,8 @@ def validate_stop_distance(v):
 # OPEN TRADE
 # ===================================================
 
-def open_trade(symbol, action, stop_distance):
+def open_trade(symbol, action, stop_distance, size, tp):
+
 
     if spread_too_large(symbol):
         log.warning("Spread too large")
@@ -199,17 +200,16 @@ def open_trade(symbol, action, stop_distance):
     price = get_price(symbol, action)
     dp = decimal_places(symbol)
 
-    tp_distance = price * (TP_PERCENT / 100)
-
+    
     if action == "buy":
 
-        units = FIXED_UNITS
+        units = int(float(size) * 100000)
         sl = round(price - stop_distance, dp)
         tp = round(price + tp_distance, dp)
 
     else:
 
-        units = -FIXED_UNITS
+        units = -int(float(size) * 100000)
         sl = round(price + stop_distance, dp)
         tp = round(price - tp_distance, dp)
 
@@ -275,11 +275,14 @@ def webhook():
 
     try:
 
-        stop_distance = validate_stop_distance(
-            data["stop_distance"]
-        )
+        price = get_price(symbol, action)
 
-        open_trade(symbol, action, stop_distance)
+stop_price = float(data["stop"])
+stop_distance = abs(price - stop_price)
+
+stop_distance = validate_stop_distance(stop_distance)
+
+        open_trade(symbol, action, stop_distance, data["size"], data["tp"])
 
     except Exception as e:
 
@@ -330,6 +333,9 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=10000
     )
+
+
+
 
 
 
