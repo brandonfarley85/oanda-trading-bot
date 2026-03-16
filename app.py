@@ -256,7 +256,7 @@ def webhook():
         stop_price = float(data["stop"])
         size = float(data["size"])
     except Exception as e:
-        return jsonify({"error":str(e)}),400
+        return jsonify({"error": str(e)}), 400
 
     symbol = format_symbol(symbol_raw)
 
@@ -286,8 +286,7 @@ def webhook():
         log.error(str(e))
         return jsonify({"error":str(e)}),500
 
-    return jsonify({"status":"trade sent"})
-# ===================================================
+    return jsonify({"status":"trade sent"})# ===================================================
 # HEALTH CHECK
 # ===================================================
 
@@ -329,8 +328,6 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=10000
     )
-
-
 
 
 
