@@ -122,7 +122,7 @@ def spread_too_large(symbol):
     elif "XAU" in symbol:
         max_spread = 0.50      # 50 pips for Gold
     else:
-        max_spread = 0.0005    # 5 pips for all other pairs
+        max_spread = 0.002    # 20 pips for all other pairs
     if spread > max_spread:
         log.warning(f"Spread too large: {spread} > {max_spread} — trade blocked")
         return True
