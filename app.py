@@ -1,6 +1,6 @@
 """
 Farleys Pinpoint Velocity BOT
-OANDA Webhook Server — CLEAN STABLE VERSION
+OANDA Webhook Server — FIXED VERSION
 """
 
 from flask import Flask, request, jsonify
@@ -48,10 +48,7 @@ client = oandapyV20.API(
 # BOT SETTINGS
 # ===================================================
 
-FIXED_UNITS = 75000
-TP_PERCENT = 3.0
 COOLDOWN_SEC = 10
-
 LAST_TRADE_TIME = 0
 LAST_TRADE_ID = None
 
@@ -60,19 +57,19 @@ LAST_TRADE_ID = None
 # ===================================================
 
 SYMBOL_MAP = {
-    "EURUSD":"EUR_USD",
-    "GBPUSD":"GBP_USD",
-    "USDJPY":"USD_JPY",
-    "USDCHF":"USD_CHF",
-    "AUDUSD":"AUD_USD",
-    "USDCAD":"USD_CAD",
-    "NZDUSD":"NZD_USD",
-    "XAUUSD":"XAU_USD"
+    "EURUSD": "EUR_USD",
+    "GBPUSD": "GBP_USD",
+    "USDJPY": "USD_JPY",
+    "USDCHF": "USD_CHF",
+    "AUDUSD": "AUD_USD",
+    "USDCAD": "USD_CAD",
+    "NZDUSD": "NZD_USD",
+    "XAUUSD": "XAU_USD"
 }
 
 def clean_symbol(raw):
     s = raw.upper().strip()
-    s = s.replace("/", "").replace("-", "")
+    s = s.replace("/", "").replace("-", "").replace("_", "")
     if ":" in s:
         s = s.split(":")[-1]
     return s
@@ -90,7 +87,6 @@ def format_symbol(raw):
 # ===================================================
 
 def decimal_places(symbol):
-
     if "JPY" in symbol:
         return 3
     if "XAU" in symbol:
@@ -102,15 +98,9 @@ def decimal_places(symbol):
 # ===================================================
 
 def get_price(symbol, action):
-
-    r = pricing.PricingInfo(
-        ACCOUNT_ID,
-        params={"instruments":symbol}
-    )
-
+    r = pricing.PricingInfo(ACCOUNT_ID, params={"instruments": symbol})
     resp = client.request(r)
     price_data = resp["prices"][0]
-
     if action == "buy":
         return float(price_data["closeoutAsk"])
     else:
@@ -121,23 +111,17 @@ def get_price(symbol, action):
 # ===================================================
 
 def spread_too_large(symbol):
-
-    r = pricing.PricingInfo(
-        ACCOUNT_ID,
-        params={"instruments":symbol}
-    )
-
+    r = pricing.PricingInfo(ACCOUNT_ID, params={"instruments": symbol})
     resp = client.request(r)
     p = resp["prices"][0]
-
     ask = float(p["closeoutAsk"])
     bid = float(p["closeoutBid"])
-
     spread = ask - bid
-
-    if spread > ask * 0.001:
+    # Max spread: 3 pips for JPY pairs, 2 pips for others
+    max_spread = 0.03 if "JPY" in symbol else 0.0003
+    if spread > max_spread:
+        log.warning(f"Spread too large: {spread}")
         return True
-
     return False
 
 # ===================================================
@@ -145,73 +129,70 @@ def spread_too_large(symbol):
 # ===================================================
 
 def position_exists(symbol):
-
     try:
-
-        r = positions.PositionDetails(
-            ACCOUNT_ID,
-            instrument=symbol
-        )
-
+        r = positions.PositionDetails(ACCOUNT_ID, instrument=symbol)
         resp = client.request(r)
-
         long_units = float(resp["position"]["long"]["units"])
         short_units = float(resp["position"]["short"]["units"])
-
         if long_units != 0 or short_units != 0:
             return True
-
     except:
         pass
-
     return False
 
 # ===================================================
-# STOP DISTANCE VALIDATION
+# CLOSE POSITION
 # ===================================================
 
-def validate_stop_distance(v):
-
-    v = float(v)
-
-    if math.isnan(v) or math.isinf(v) or v <= 0:
-        raise ValueError("Invalid stop distance")
-
-    if v > 0.02:
-        raise ValueError("Stop distance too large")
-
-    return v
+def close_position(symbol, side):
+    try:
+        if side == "buy":
+            data = {"longUnits": "ALL"}
+        else:
+            data = {"shortUnits": "ALL"}
+        r = positions.PositionClose(ACCOUNT_ID, instrument=symbol, data=data)
+        resp = client.request(r)
+        log.info(f"CLOSED {side} position on {symbol}: {json.dumps(resp, indent=2)}")
+    except Exception as e:
+        log.error(f"Failed to close position: {e}")
 
 # ===================================================
-# OPEN TRADE
+# OPEN TRADE — uses SL and TP directly from alert
 # ===================================================
 
-def open_trade(symbol, action, stop_distance, size):
+def open_trade(symbol, action, stop_price, tp_price, size):
 
     if spread_too_large(symbol):
-        log.warning("Spread too large")
+        log.warning("Spread too large — trade blocked")
         return
 
     if position_exists(symbol):
-        log.warning("Position already open")
+        log.warning("Position already open — trade blocked")
         return
 
     price = get_price(symbol, action)
     dp = decimal_places(symbol)
 
-    tp_distance = stop_distance * 3
+    # Use stop and tp exactly as sent from TradingView
+    sl = round(float(stop_price), dp)
+    tp = round(float(tp_price), dp)
 
     if action == "buy":
-
         units = int(float(size) * 100000)
-        sl = round(price - stop_distance, dp)
-        tp = round(price + tp_distance, dp)
-
+        # Validate SL is below price
+        if sl >= price:
+            log.error(f"Invalid SL for BUY: sl={sl} price={price}")
+            return
     else:
-
         units = -int(float(size) * 100000)
-        sl = round(price + stop_distance, dp)
-        tp = round(price - tp_distance, dp)
+        # Validate SL is above price
+        if sl <= price:
+            log.error(f"Invalid SL for SELL: sl={sl} price={price}")
+            return
+
+    if units == 0:
+        log.error("Units calculated as 0 — trade blocked")
+        return
 
     order_data = {
         "order": {
@@ -224,11 +205,11 @@ def open_trade(symbol, action, stop_distance, size):
         }
     }
 
+    log.info(f"SENDING ORDER: {json.dumps(order_data, indent=2)}")
+
     r = orders.OrderCreate(ACCOUNT_ID, data=order_data)
-
     resp = client.request(r)
-
-    log.info(json.dumps(resp, indent=2))
+    log.info(f"ORDER RESPONSE: {json.dumps(resp, indent=2)}")
 
 # ===================================================
 # WEBHOOK
@@ -237,61 +218,67 @@ def open_trade(symbol, action, stop_distance, size):
 @app.route("/webhook", methods=["POST"])
 def webhook():
 
-    global LAST_TRADE_TIME
-    global LAST_TRADE_ID
+    global LAST_TRADE_TIME, LAST_TRADE_ID
 
     raw = request.data.decode("utf-8")
-
     log.info(f"WEBHOOK RECEIVED: {raw}")
 
     if not raw:
         return jsonify({"error": "empty body"}), 400
 
-    # Parse JSON
     try:
         data = json.loads(raw)
-    except:
+    except Exception as e:
+        log.error(f"JSON parse error: {e}")
         return jsonify({"error": "invalid json"}), 400
 
-    # Extract data
+    log.info(f"PARSED DATA: {data}")
+
+    # Extract action
     try:
         symbol_raw = data["symbol"]
-        action = data["action"]
-        stop_price = float(data["stop"])
-        size = float(data["size"])
+        action     = data["action"].lower()
     except Exception as e:
-        return jsonify({"error": str(e)}), 400
+        return jsonify({"error": f"missing field: {e}"}), 400
 
     symbol = format_symbol(symbol_raw)
+    log.info(f"SYMBOL: {symbol} | ACTION: {action}")
 
-    trade_id = f"{symbol}_{action}_{int(time.time()/30)}"
+    # ===== HANDLE CLOSE =====
+    if action == "close":
+        side = data.get("side", "")
+        close_position(symbol, side)
+        return jsonify({"status": "close sent"})
 
+    # ===== HANDLE BUY / SELL =====
+    try:
+        stop_price = float(data["stop"])
+        tp_price   = float(data["tp"])
+        size       = float(data["size"])
+    except Exception as e:
+        log.error(f"Missing trade field: {e}")
+        return jsonify({"error": f"missing field: {e}"}), 400
+
+    # Cooldown check
+    trade_id = f"{symbol}_{action}_{int(time.time() / 30)}"
     if trade_id == LAST_TRADE_ID:
+        log.warning("Duplicate trade ignored")
         return jsonify({"status": "duplicate ignored"})
 
     if time.time() - LAST_TRADE_TIME < COOLDOWN_SEC:
+        log.warning("Cooldown active")
         return jsonify({"status": "cooldown active"})
 
-    LAST_TRADE_ID = trade_id
+    LAST_TRADE_ID   = trade_id
     LAST_TRADE_TIME = time.time()
 
     try:
-
-        price = get_price(symbol, action)
-
-        stop_distance = abs(price - stop_price)
-
-        stop_distance = validate_stop_distance(stop_distance)
-
-        open_trade(symbol, action, stop_distance, size)
-
+        open_trade(symbol, action, stop_price, tp_price, size)
     except Exception as e:
-
-        log.error(str(e))
+        log.error(f"Trade error: {e}")
         return jsonify({"error": str(e)}), 500
 
     return jsonify({"status": "trade sent"})
-
 
 # ===================================================
 # HEALTH CHECK
@@ -299,21 +286,13 @@ def webhook():
 
 @app.route("/health")
 def health():
-
     try:
-
         r = accounts.AccountSummary(ACCOUNT_ID)
         resp = client.request(r)
-
         equity = resp["account"]["NAV"]
-
-        return jsonify({
-            "status": "running",
-            "equity": equity
-        })
-
-    except:
-        return jsonify({"status": "error"}), 500
+        return jsonify({"status": "running", "equity": equity})
+    except Exception as e:
+        return jsonify({"status": "error", "detail": str(e)}), 500
 
 # ===================================================
 # ROOT PAGE
@@ -328,17 +307,8 @@ def home():
 # ===================================================
 
 if __name__ == "__main__":
-
     log.info("BOT STARTED")
-
-    app.run(
-        host="0.0.0.0",
-        port=10000
-    )
-
-
-
-
+    app.run(host="0.0.0.0", port=10000)
 
 
 
