@@ -242,16 +242,18 @@ def webhook():
 
     raw = request.data.decode("utf-8")
 
-    log.info(f"Webhook received: {raw}")
+    log.info(f"WEBHOOK RECEIVED: {raw}")
 
     if not raw:
-        return jsonify({"error":"empty body"}),400
+        return jsonify({"error": "empty body"}), 400
 
+    # Parse JSON
     try:
         data = json.loads(raw)
     except:
-        return jsonify({"error":"invalid json"}),400
+        return jsonify({"error": "invalid json"}), 400
 
+    # Extract data
     try:
         symbol_raw = data["symbol"]
         action = data["action"]
@@ -265,10 +267,10 @@ def webhook():
     trade_id = f"{symbol}_{action}_{int(time.time()/30)}"
 
     if trade_id == LAST_TRADE_ID:
-        return jsonify({"status":"duplicate ignored"})
+        return jsonify({"status": "duplicate ignored"})
 
     if time.time() - LAST_TRADE_TIME < COOLDOWN_SEC:
-        return jsonify({"status":"cooldown active"})
+        return jsonify({"status": "cooldown active"})
 
     LAST_TRADE_ID = trade_id
     LAST_TRADE_TIME = time.time()
@@ -286,9 +288,12 @@ def webhook():
     except Exception as e:
 
         log.error(str(e))
-        return jsonify({"error":str(e)}),500
+        return jsonify({"error": str(e)}), 500
 
-    return jsonify({"status":"trade sent"})# ===================================================
+    return jsonify({"status": "trade sent"})
+
+
+# ===================================================
 # HEALTH CHECK
 # ===================================================
 
@@ -303,12 +308,12 @@ def health():
         equity = resp["account"]["NAV"]
 
         return jsonify({
-            "status":"running",
-            "equity":equity
+            "status": "running",
+            "equity": equity
         })
 
     except:
-        return jsonify({"status":"error"}),500
+        return jsonify({"status": "error"}), 500
 
 # ===================================================
 # ROOT PAGE
@@ -330,6 +335,9 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=10000
     )
+
+
+
 
 
 
