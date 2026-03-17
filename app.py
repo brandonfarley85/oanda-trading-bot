@@ -117,10 +117,14 @@ def spread_too_large(symbol):
     ask = float(p["closeoutAsk"])
     bid = float(p["closeoutBid"])
     spread = ask - bid
-    # Max spread: 3 pips for JPY pairs, 2 pips for others
-    max_spread = 0.03 if "JPY" in symbol else 0.0003
+    if "JPY" in symbol:
+        max_spread = 0.05      # 5 pips for JPY
+    elif "XAU" in symbol:
+        max_spread = 0.50      # 50 pips for Gold
+    else:
+        max_spread = 0.0005    # 5 pips for all other pairs
     if spread > max_spread:
-        log.warning(f"Spread too large: {spread}")
+        log.warning(f"Spread too large: {spread} > {max_spread} — trade blocked")
         return True
     return False
 
