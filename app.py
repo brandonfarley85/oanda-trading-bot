@@ -242,6 +242,8 @@ def webhook():
 
     raw = request.data.decode("utf-8")
 
+    log.info(f"Webhook received: {raw}")
+
     if not raw:
         return jsonify({"error":"empty body"}),400
 
@@ -328,10 +330,6 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=10000
     )
-
-
-
-
 
 
 
