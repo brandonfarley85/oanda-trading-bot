@@ -60,6 +60,7 @@ LAST_TRADE_ID = None
 # ===================================================
 
 SYMBOL_MAP = {
+    # Majors
     "EURUSD": "EUR_USD",
     "GBPUSD": "GBP_USD",
     "USDJPY": "USD_JPY",
@@ -67,7 +68,31 @@ SYMBOL_MAP = {
     "AUDUSD": "AUD_USD",
     "USDCAD": "USD_CAD",
     "NZDUSD": "NZD_USD",
-    "XAUUSD": "XAU_USD"
+    # Crosses
+    "EURGBP": "EUR_GBP",
+    "EURJPY": "EUR_JPY",
+    "EURCAD": "EUR_CAD",
+    "EURAUD": "EUR_AUD",
+    "EURNZD": "EUR_NZD",
+    "EURCHF": "EUR_CHF",
+    "GBPJPY": "GBP_JPY",
+    "GBPCAD": "GBP_CAD",
+    "GBPAUD": "GBP_AUD",
+    "GBPNZD": "GBP_NZD",
+    "GBPCHF": "GBP_CHF",
+    "AUDJPY": "AUD_JPY",
+    "AUDCAD": "AUD_CAD",
+    "AUDNZD": "AUD_NZD",
+    "AUDCHF": "AUD_CHF",
+    "NZDJPY": "NZD_JPY",
+    "NZDCAD": "NZD_CAD",
+    "NZDCHF": "NZD_CHF",
+    "CADJPY": "CAD_JPY",
+    "CADCHF": "CAD_CHF",
+    "CHFJPY": "CHF_JPY",
+    # Metals
+    "XAUUSD": "XAU_USD",
+    "XAGUSD": "XAG_USD",
 }
 
 def clean_symbol(raw):
@@ -326,7 +351,6 @@ if __name__ == "__main__":
     log.info("BOT STARTED")
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
-
 
 
 
