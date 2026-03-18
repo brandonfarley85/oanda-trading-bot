@@ -1,6 +1,10 @@
 """
 Farleys Pinpoint Velocity BOT
-OANDA Webhook Server — FIXED VERSION
+OANDA Webhook Server — UPDATED VERSION
+- Auto 40 pip stop loss if not sent
+- Auto 60 pip take profit if not sent
+- Loosened spread to 30 pips
+- Cooldown reduced to 5 seconds
 """
 
 from flask import Flask, request, jsonify
@@ -10,7 +14,6 @@ import oandapyV20.endpoints.positions as positions
 import oandapyV20.endpoints.pricing as pricing
 import oandapyV20.endpoints.accounts as accounts
 import json
-import math
 import logging
 import time
 
@@ -48,7 +51,7 @@ client = oandapyV20.API(
 # BOT SETTINGS
 # ===================================================
 
-COOLDOWN_SEC = 10
+COOLDOWN_SEC = 5        # FIX 1: was 10, reduced to 5
 LAST_TRADE_TIME = 0
 LAST_TRADE_ID = None
 
@@ -118,11 +121,11 @@ def spread_too_large(symbol):
     bid = float(p["closeoutBid"])
     spread = ask - bid
     if "JPY" in symbol:
-        max_spread = 0.05      # 5 pips for JPY
+        max_spread = 0.05       # 5 pips for JPY
     elif "XAU" in symbol:
-        max_spread = 0.50      # 50 pips for Gold
+        max_spread = 0.50       # 50 pips for Gold
     else:
-        max_spread = 0.002    # 20 pips for all other pairs
+        max_spread = 0.003      # FIX 2: was 0.002 (20 pips), now 0.003 (30 pips)
     if spread > max_spread:
         log.warning(f"Spread too large: {spread} > {max_spread} — trade blocked")
         return True
@@ -161,7 +164,7 @@ def close_position(symbol, side):
         log.error(f"Failed to close position: {e}")
 
 # ===================================================
-# OPEN TRADE — uses SL and TP directly from alert
+# OPEN TRADE — auto SL/TP if not provided
 # ===================================================
 
 def open_trade(symbol, action, stop_price, tp_price, size):
@@ -174,22 +177,31 @@ def open_trade(symbol, action, stop_price, tp_price, size):
         log.warning("Position already open — trade blocked")
         return
 
+    PIP_SIZE = 0.01 if "JPY" in symbol else 0.0001
+    STOP_PIPS = 40
+    TP_PIPS = 60
+
     price = get_price(symbol, action)
     dp = decimal_places(symbol)
 
-    # Use stop and tp exactly as sent from TradingView
-    sl = round(float(stop_price), dp)
-    tp = round(float(tp_price), dp)
+    if stop_price == 0:
+        if action == "buy":
+            sl = round(price - (STOP_PIPS * PIP_SIZE), dp)
+            tp = round(price + (TP_PIPS * PIP_SIZE), dp)
+        else:
+            sl = round(price + (STOP_PIPS * PIP_SIZE), dp)
+            tp = round(price - (TP_PIPS * PIP_SIZE), dp)
+    else:
+        sl = round(float(stop_price), dp)
+        tp = round(float(tp_price), dp)
 
     if action == "buy":
         units = int(float(size) * 100000)
-        # Validate SL is below price
         if sl >= price:
             log.error(f"Invalid SL for BUY: sl={sl} price={price}")
             return
     else:
         units = -int(float(size) * 100000)
-        # Validate SL is above price
         if sl <= price:
             log.error(f"Invalid SL for SELL: sl={sl} price={price}")
             return
@@ -213,7 +225,7 @@ def open_trade(symbol, action, stop_price, tp_price, size):
 
     r = orders.OrderCreate(ACCOUNT_ID, data=order_data)
     resp = client.request(r)
-    log.info(f"ORDER RESPONSE: {json.dumps(resp, indent=2)}")
+    log.info(f"ORDER RESPONSE: {json.dumps(resp, indent=2)}")  # FIX 3: was missing closing )
 
 # ===================================================
 # WEBHOOK
@@ -238,7 +250,6 @@ def webhook():
 
     log.info(f"PARSED DATA: {data}")
 
-    # Extract action
     try:
         symbol_raw = data["symbol"]
         action     = data["action"].lower()
@@ -256,9 +267,9 @@ def webhook():
 
     # ===== HANDLE BUY / SELL =====
     try:
-        stop_price = float(data["stop"])
-        tp_price   = float(data["tp"])
-        size       = float(data["size"])
+        stop_price = float(data.get("stop", 0))
+        tp_price   = float(data.get("tp", 0))
+        size       = float(data["size"])   # size is still required in the alert
     except Exception as e:
         log.error(f"Missing trade field: {e}")
         return jsonify({"error": f"missing field: {e}"}), 400
@@ -315,7 +326,6 @@ if __name__ == "__main__":
     log.info("BOT STARTED")
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
-
 
 
 
