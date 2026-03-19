@@ -1,10 +1,11 @@
 """
 Farleys Pinpoint Velocity BOT
-OANDA Webhook Server — UPDATED VERSION
-- Auto 40 pip stop loss if not sent
-- Auto 60 pip take profit if not sent
-- Loosened spread to 30 pips
-- Cooldown reduced to 5 seconds
+OANDA Webhook Server — VELOCITY STRATEGY VERSION
+- Stop and TP always sent by Pine Script (structure-based)
+- Size sent as lot size by Pine Script (0.01 minimum)
+- Symbol arrives pre-formatted as EUR_USD style
+- Spread protection built in
+- Cooldown 5 seconds
 """
 
 from flask import Flask, request, jsonify
@@ -38,9 +39,9 @@ app = Flask(__name__)
 # OANDA CREDENTIALS
 # ===================================================
 
-ACCOUNT_ID = "101-001-24987993-002"
+ACCOUNT_ID  = "101-001-24987993-002"
 ACCESS_TOKEN = "1a08faff98fd3fef165a4ee4ca69f245-43834b16d9b0baf270518ce1edc5f2dd"
-ENVIRONMENT = "practice"
+ENVIRONMENT  = "practice"
 
 client = oandapyV20.API(
     access_token=ACCESS_TOKEN,
@@ -51,63 +52,23 @@ client = oandapyV20.API(
 # BOT SETTINGS
 # ===================================================
 
-COOLDOWN_SEC = 5        # FIX 1: was 10, reduced to 5
+COOLDOWN_SEC    = 5
 LAST_TRADE_TIME = 0
-LAST_TRADE_ID = None
+LAST_TRADE_ID   = None
 
 # ===================================================
-# SYMBOL CONVERSION
+# SYMBOL CLEANUP
+# — Pine Script sends EUR_USD format already
+# — This just makes sure it's clean
 # ===================================================
-
-SYMBOL_MAP = {
-    # Majors
-    "EURUSD": "EUR_USD",
-    "GBPUSD": "GBP_USD",
-    "USDJPY": "USD_JPY",
-    "USDCHF": "USD_CHF",
-    "AUDUSD": "AUD_USD",
-    "USDCAD": "USD_CAD",
-    "NZDUSD": "NZD_USD",
-    # Crosses
-    "EURGBP": "EUR_GBP",
-    "EURJPY": "EUR_JPY",
-    "EURCAD": "EUR_CAD",
-    "EURAUD": "EUR_AUD",
-    "EURNZD": "EUR_NZD",
-    "EURCHF": "EUR_CHF",
-    "GBPJPY": "GBP_JPY",
-    "GBPCAD": "GBP_CAD",
-    "GBPAUD": "GBP_AUD",
-    "GBPNZD": "GBP_NZD",
-    "GBPCHF": "GBP_CHF",
-    "AUDJPY": "AUD_JPY",
-    "AUDCAD": "AUD_CAD",
-    "AUDNZD": "AUD_NZD",
-    "AUDCHF": "AUD_CHF",
-    "NZDJPY": "NZD_JPY",
-    "NZDCAD": "NZD_CAD",
-    "NZDCHF": "NZD_CHF",
-    "CADJPY": "CAD_JPY",
-    "CADCHF": "CAD_CHF",
-    "CHFJPY": "CHF_JPY",
-    # Metals
-    "XAUUSD": "XAU_USD",
-    "XAGUSD": "XAG_USD",
-}
-
-def clean_symbol(raw):
-    s = raw.upper().strip()
-    s = s.replace("/", "").replace("-", "").replace("_", "")
-    if ":" in s:
-        s = s.split(":")[-1]
-    return s
 
 def format_symbol(raw):
-    s = clean_symbol(raw)
-    if s in SYMBOL_MAP:
-        return SYMBOL_MAP[s]
-    if len(s) == 6:
-        return f"{s[:3]}_{s[3:]}"
+    s = raw.upper().strip()
+    # Already in EUR_USD format from Pine — just clean any junk
+    s = s.replace("OANDA:", "").replace("/", "")
+    # If it came in without underscore (e.g. EURUSD), add it
+    if "_" not in s and len(s) == 6:
+        s = s[:3] + "_" + s[3:]
     return s
 
 # ===================================================
@@ -122,19 +83,6 @@ def decimal_places(symbol):
     return 5
 
 # ===================================================
-# GET PRICE
-# ===================================================
-
-def get_price(symbol, action):
-    r = pricing.PricingInfo(ACCOUNT_ID, params={"instruments": symbol})
-    resp = client.request(r)
-    price_data = resp["prices"][0]
-    if action == "buy":
-        return float(price_data["closeoutAsk"])
-    else:
-        return float(price_data["closeoutBid"])
-
-# ===================================================
 # SPREAD PROTECTION
 # ===================================================
 
@@ -146,11 +94,11 @@ def spread_too_large(symbol):
     bid = float(p["closeoutBid"])
     spread = ask - bid
     if "JPY" in symbol:
-        max_spread = 0.05       # 5 pips for JPY
+        max_spread = 0.05
     elif "XAU" in symbol:
-        max_spread = 0.50       # 50 pips for Gold
+        max_spread = 0.50
     else:
-        max_spread = 0.003      # FIX 2: was 0.002 (20 pips), now 0.003 (30 pips)
+        max_spread = 0.003
     if spread > max_spread:
         log.warning(f"Spread too large: {spread} > {max_spread} — trade blocked")
         return True
@@ -164,7 +112,7 @@ def position_exists(symbol):
     try:
         r = positions.PositionDetails(ACCOUNT_ID, instrument=symbol)
         resp = client.request(r)
-        long_units = float(resp["position"]["long"]["units"])
+        long_units  = float(resp["position"]["long"]["units"])
         short_units = float(resp["position"]["short"]["units"])
         if long_units != 0 or short_units != 0:
             return True
@@ -189,10 +137,12 @@ def close_position(symbol, side):
         log.error(f"Failed to close position: {e}")
 
 # ===================================================
-# OPEN TRADE — auto SL/TP if not provided
+# OPEN TRADE
+# — Velocity Pine ALWAYS sends stop and tp
+# — Size comes as lot size (e.g. 0.05) → convert to units
 # ===================================================
 
-def open_trade(symbol, action, stop_price, tp_price, size):
+def open_trade(symbol, action, stop_price, tp_price, lot_size):
 
     if spread_too_large(symbol):
         log.warning("Spread too large — trade blocked")
@@ -202,46 +152,50 @@ def open_trade(symbol, action, stop_price, tp_price, size):
         log.warning("Position already open — trade blocked")
         return
 
-    PIP_SIZE = 0.01 if "JPY" in symbol else 0.0001
-    STOP_PIPS = 40
-    TP_PIPS = 60
-
-    price = get_price(symbol, action)
     dp = decimal_places(symbol)
 
-    if stop_price == 0:
-        if action == "buy":
-            sl = round(price - (STOP_PIPS * PIP_SIZE), dp)
-            tp = round(price + (TP_PIPS * PIP_SIZE), dp)
-        else:
-            sl = round(price + (STOP_PIPS * PIP_SIZE), dp)
-            tp = round(price - (TP_PIPS * PIP_SIZE), dp)
-    else:
-        sl = round(float(stop_price), dp)
-        tp = round(float(tp_price), dp)
+    # Stop and TP always come from Pine for Velocity Bot
+    sl = round(float(stop_price), dp)
+    tp = round(float(tp_price), dp)
 
+    # Convert lot size to OANDA units (1 lot = 100,000 units)
     if action == "buy":
-        units = int(float(size) * 100000)
-        if sl >= price:
-            log.error(f"Invalid SL for BUY: sl={sl} price={price}")
-            return
+        units = int(round(float(lot_size) * 100000))
     else:
-        units = -int(float(size) * 100000)
-        if sl <= price:
-            log.error(f"Invalid SL for SELL: sl={sl} price={price}")
-            return
+        units = -int(round(float(lot_size) * 100000))
 
     if units == 0:
         log.error("Units calculated as 0 — trade blocked")
         return
 
+    # Get current price for validation
+    r_price = pricing.PricingInfo(ACCOUNT_ID, params={"instruments": symbol})
+    resp_price = client.request(r_price)
+    price_data = resp_price["prices"][0]
+    if action == "buy":
+        price = float(price_data["closeoutAsk"])
+        if sl >= price:
+            log.error(f"Invalid SL for BUY: sl={sl} >= price={price} — trade blocked")
+            return
+        if tp <= price:
+            log.error(f"Invalid TP for BUY: tp={tp} <= price={price} — trade blocked")
+            return
+    else:
+        price = float(price_data["closeoutBid"])
+        if sl <= price:
+            log.error(f"Invalid SL for SELL: sl={sl} <= price={price} — trade blocked")
+            return
+        if tp >= price:
+            log.error(f"Invalid TP for SELL: tp={tp} >= price={price} — trade blocked")
+            return
+
     order_data = {
         "order": {
-            "instrument": symbol,
-            "units": str(units),
-            "type": "MARKET",
-            "positionFill": "DEFAULT",
-            "stopLossOnFill": {"price": str(sl)},
+            "instrument":    symbol,
+            "units":         str(units),
+            "type":          "MARKET",
+            "positionFill":  "DEFAULT",
+            "stopLossOnFill":   {"price": str(sl)},
             "takeProfitOnFill": {"price": str(tp)}
         }
     }
@@ -250,7 +204,7 @@ def open_trade(symbol, action, stop_price, tp_price, size):
 
     r = orders.OrderCreate(ACCOUNT_ID, data=order_data)
     resp = client.request(r)
-    log.info(f"ORDER RESPONSE: {json.dumps(resp, indent=2)}")  # FIX 3: was missing closing )
+    log.info(f"ORDER RESPONSE: {json.dumps(resp, indent=2)}")
 
 # ===================================================
 # WEBHOOK
@@ -291,13 +245,18 @@ def webhook():
         return jsonify({"status": "close sent"})
 
     # ===== HANDLE BUY / SELL =====
+    # Velocity Pine always sends stop and tp — both are required
     try:
-        stop_price = float(data.get("stop", 0))
-        tp_price   = float(data.get("tp", 0))
-        size       = float(data["size"])   # size is still required in the alert
+        stop_price = float(data["stop"])
+        tp_price   = float(data["tp"])
+        lot_size   = float(data["size"])
     except Exception as e:
-        log.error(f"Missing trade field: {e}")
-        return jsonify({"error": f"missing field: {e}"}), 400
+        log.error(f"Missing required field: {e}")
+        return jsonify({"error": f"missing field: {e} — Velocity Bot requires stop, tp, and size"}), 400
+
+    if stop_price == 0 or tp_price == 0:
+        log.error("Stop or TP is 0 — trade blocked. Velocity Bot requires valid stop and tp.")
+        return jsonify({"error": "stop and tp must be non-zero"}), 400
 
     # Cooldown check
     trade_id = f"{symbol}_{action}_{int(time.time() / 30)}"
@@ -313,7 +272,7 @@ def webhook():
     LAST_TRADE_TIME = time.time()
 
     try:
-        open_trade(symbol, action, stop_price, tp_price, size)
+        open_trade(symbol, action, stop_price, tp_price, lot_size)
     except Exception as e:
         log.error(f"Trade error: {e}")
         return jsonify({"error": str(e)}), 500
@@ -340,7 +299,7 @@ def health():
 
 @app.route("/")
 def home():
-    return "Farleys OANDA Bot Running"
+    return "Farleys Velocity Bot Running"
 
 # ===================================================
 # START SERVER
@@ -348,11 +307,9 @@ def home():
 
 if __name__ == "__main__":
     import os
-    log.info("BOT STARTED")
+    log.info("VELOCITY BOT STARTED")
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
-
-
 
 
 
